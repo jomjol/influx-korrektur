@@ -1,4 +1,5 @@
 """Erzeugt HA-typische Testdaten im Fake-Influx (Zählerstand mit Lücken)."""
+import math
 import random
 from datetime import datetime, timedelta, timezone
 
@@ -21,4 +22,20 @@ def seed(days: int = 60, write=write_lines):
             lines.append(f'kWh,domain=sensor,entity_id=keba_p30_total_energy '
                          f'value={v:.3f},friendly_name_str="KEBA P30 Gesamtenergie" {ns}')
         t += timedelta(minutes=30)
+    write("\n".join(lines))
+
+    # Temperatur (Messwert): alle 10 min, Tagesgang, 1 Datenloch (9 h), 2 Ausreißer
+    random.seed(2)
+    lines = []
+    t = start
+    hole = (now - timedelta(days=5, hours=3), now - timedelta(days=4, hours=18))
+    spikes = {now - timedelta(days=8, hours=7, minutes=20): 85.0, now - timedelta(days=12, hours=2): -40.0}
+    while t < now:
+        if not (hole[0] <= t < hole[1]):
+            v = 20 + 3 * math.sin((t.hour + t.minute / 60 - 9) / 24 * 2 * math.pi) + random.uniform(-0.2, 0.2)
+            v = spikes.get(t, v)
+            ns = int(t.timestamp()) * 1_000_000_000 + random.randint(0, 999_999_999)
+            lines.append(f'°C,domain=sensor,entity_id=wohnzimmer_temperatur value={v:.2f},'
+                         f'friendly_name_str="Wohnzimmer Temperatur" {ns}')
+        t += timedelta(minutes=10)
     write("\n".join(lines))

@@ -1,9 +1,24 @@
 # Influx-Korrektur
 
-Weboberfläche zum Kontrollieren und Korrigieren von Zählerständen (Strom, Wasser, …), die Home Assistant
-über die InfluxDB-Integration schreibt. Läuft als eigenständiger Docker-Container, z. B. auf der Synology.
+Weboberfläche zum Kontrollieren und Korrigieren von Zeitreihen, die Home Assistant über die
+InfluxDB-Integration schreibt: Zählerstände (Strom, Wasser, …) und normale Messwerte (Temperatur,
+Feuchte, …). Läuft als eigenständiger Docker-Container, z. B. auf der Synology.
 
-## Funktionen
+## Auswertungsmodi
+
+Der Modus wird pro Serie gewählt: **Automatisch**, **Zähler** oder **Messwert**. Die Automatik erkennt
+einen Zähler an fast monoton steigenden Werten. Modus und Parameter werden je Serie in
+`data/settings.json` gespeichert.
+
+| | Zähler (Differenz/Tag) | Messwert (Zeitreihe) |
+|---|---|---|
+| Tageswert | Verbrauch = max(Tag) − max(Vortag) | Min / Mittel / Max |
+| Datenloch | nur über Mitternacht mit Zählerzuwachs | jede Lücke > `HOLE_HOURS` |
+| Lücken füllen | ein Stützpunkt je Tag um 23:59:59 | Punkte im Raster (`GRID_MINUTES`) |
+| Ausreißer | Tag: Verbrauch > Faktor × Median | Punkt: Hampel-Filter (Faktor × MAD) + Plausibilitätsbereich min/max |
+| Bereinigen | – | Ausreißer löschen oder durch interpolierten Wert ersetzen |
+
+## Funktionen (Zähler-Modus im Detail)
 
 - **Tagesübersicht**: Tagesverbrauch wie in der bestehenden Auswertung
   (`derivative(max(value),1d) … fill(previous) tz('Europe/Berlin')`), mit Diagramm und Statusmarken:
@@ -15,6 +30,8 @@ Weboberfläche zum Kontrollieren und Korrigieren von Zählerständen (Strom, Was
   (lokale Zeit, sommerzeitfest). Werte sind vor dem Schreiben änderbar; eine Vorschau zeigt den
   Tagesverbrauch vorher und nachher.
 - **Rohdaten**: Punkte eines Tages (± n Tage), einzeln einfügen (mit Interpolation), ändern, löschen.
+- **Messwert-Modus**: Tagesbänder Min–Max mit Mittelwert; Ausreißer erscheinen in den Rohdaten mit
+  ⚠️-Hinweis und rotem Kreuz im Diagramm.
 - **Protokoll + Undo**: Vor jeder Änderung werden die Originalpunkte mit allen Fields und exakten Tags
   in `data/audit.jsonl` gesichert. Jede Aktion lässt sich rückgängig machen.
 

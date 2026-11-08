@@ -66,6 +66,29 @@ class Operations:
         return self._log({"action": "insert", "measurement": measurement, "entity": entity,
                           "time_ns": int(t_ns), "comment": comment, "before": [], "after": [p.to_dict()]})
 
+    def insert_many(self, measurement: str, entity: str, items: list[tuple[int, float]],
+                    comment: str = "") -> dict:
+        """Viele Punkte in einem Batch einfügen (ein Protokolleintrag, gemeinsames Undo)."""
+        items = sorted((int(t), float(v)) for t, v in items)
+        if not items:
+            raise InfluxError("Keine Punkte zum Einfügen.")
+        existing = {t for t, _ in self.c.values(measurement, entity, items[0][0], items[-1][0] + 1)}
+        items = [(t, v) for t, v in items if t not in existing]
+        if not items:
+            raise InfluxError("Alle Zeitstempel sind bereits belegt.")
+        tags = self.c.tags_near(measurement, entity, items[0][0])
+        pts = []
+        for t, v in items:
+            fields = {"value": v}
+            if self.mark_field:
+                fields[self.mark_field] = "manuell"
+            pts.append(Point(measurement, tags, fields, t))
+        for i in range(0, len(pts), 5000):
+            self._write(pts[i:i + 5000])
+        return self._log({"action": "insert_many", "measurement": measurement, "entity": entity,
+                          "time_ns": items[0][0], "comment": comment, "before": [],
+                          "after": [p.to_dict() for p in pts]})
+
     def edit(self, measurement: str, entity: str, t_ns: int, value: float, comment: str = "") -> dict:
         before = self.c.points_at(measurement, entity, t_ns)
         if not before:
@@ -102,6 +125,9 @@ class Operations:
         m, ent, t = e["measurement"], e["entity"], int(e["time_ns"])
         if e["action"] == "insert":
             self.c.delete_at(m, ent, t)
+        elif e["action"] == "insert_many":
+            for p in e["after"]:
+                self.c.delete_at(m, ent, int(p["time_ns"]))
         elif e["action"] == "edit":
             # Originalpunkte komplett wiederherstellen (inkl. ursprünglichem korrektur_str-Zustand)
             self.c.delete_at(m, ent, t)

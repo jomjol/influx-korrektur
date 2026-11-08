@@ -76,6 +76,52 @@ def test_line_protocol_escaping():
     assert p.to_line() == 'm³,domain=sensor,entity_id=a\\ b\\,c value=1.0,friendly_name_str="X \\"Y\\"" 123'
 
 
+# ------------------------------------------------------------ Messwert-Modus
+def _temps(start="2026-10-01 00:00", hours=72, step_min=30, hole=None, spikes=None):
+    import math
+    out = []
+    t0 = ns(start)
+    for i in range(int(hours * 60 / step_min)):
+        t = t0 + i * step_min * 60 * A.NS
+        if hole and hole[0] <= i < hole[1]:
+            continue
+        v = 20 + 3 * math.sin(i / 48 * 2 * math.pi)
+        out.append((t, (spikes or {}).get(i, round(v, 3))))
+    return out
+
+
+def test_detect_mode():
+    assert A.detect_mode(_temps()) == A.GAUGE
+    assert A.detect_mode([(i, float(i)) for i in range(50)]) == A.COUNTER
+    assert A.detect_mode([(i, float(i // 3)) for i in range(50)]) == A.COUNTER   # Stufen, nicht fallend
+
+
+def test_spikes_hampel_and_limits():
+    raw = _temps(spikes={30: 85.0, 70: -40.0})
+    sp = A.find_spikes(raw, factor=5)
+    assert sorted(t for t, *_ in sp) == sorted([raw[30][0], raw[70][0]])
+    assert A.find_spikes(_temps(), factor=5) == []                       # glatter Verlauf: keine
+    lim = A.find_spikes(_temps(), factor=0, vmax=22.5)
+    assert lim and all(r.startswith(">") for *_, r in lim)
+    repl = A.spike_replacements(raw, sp)
+    assert abs(repl[raw[30][0]] - (raw[29][1] + raw[31][1]) / 2) < 1e-9
+
+
+def test_gauge_daily_and_gap_fill():
+    raw = _temps(hole=(40, 60))                 # 01.10. 20:00 – 02.10. 06:00 fehlt (10 h)
+    d = A.daily_gauge(raw, TZ, date(2026, 10, 1), date(2026, 10, 3), hole_hours=3)
+    assert list(d["status"]) == [A.PARTIAL, A.PARTIAL, ""]
+    assert "verbrauch" not in d.columns and d.loc[2, "anzahl"] == 48
+    props, _ = A.gauge_gap_proposals(raw, TZ, hole_hours=3, step_min=60)
+    assert [str(A.to_local(p.time_ns, TZ))[11:16] for p in props][:3] == ["20:00", "21:00", "22:00"]
+    assert len(props) == 10                     # 20:00 … 05:00
+    filled = A.simulate(raw, inserts=[(p.time_ns, p.wert) for p in props])
+    assert A.find_gauge_holes(filled, 3) == []
+    after = A.daily_gauge(filled, TZ, date(2026, 10, 1), date(2026, 10, 3), hole_hours=3)
+    assert not any(after["status"])
+    assert len(A.compare_cols(d, after, ["min", "mittel", "max"])) == 2
+
+
 # ------------------------------------------------------------ End-to-End gegen Fake-Influx
 @pytest.fixture(scope="module")
 def env(tmp_path_factory):
@@ -129,8 +175,13 @@ def test_e2e_insert_edit_delete_undo(env):
 
     ops.undo(e_ins["id"])
     assert c.points_at("kWh", "zaehler", t_new) == []
+    e_many = ops.insert_many("kWh", "zaehler", [(t_new + 1, 111.0), (t_new + 2, 112.0)])
+    assert len(c.values("kWh", "zaehler", t_new, t_new + 3)) == 2
+    ops.undo(e_many["id"])
+    assert c.values("kWh", "zaehler", t_new, t_new + 3) == []
     hist = ops.history()
-    assert [h["action"] for h in hist] == ["insert", "edit", "undo", "delete", "undo", "undo"]
+    assert [h["action"] for h in hist] == ["insert", "edit", "undo", "delete", "undo", "undo",
+                                              "insert_many", "undo"]
     assert all(h["undone"] for h in hist if h["action"] != "undo")
 
 

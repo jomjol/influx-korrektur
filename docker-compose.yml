@@ -1,0 +1,11 @@
+services:
+  influx-korrektur:
+    build: .
+    image: influx-korrektur:latest
+    container_name: influx-korrektur
+    restart: unless-stopped
+    ports:
+      - "8099:8080"            # Weboberfläche: http://<synology>:8099
+    env_file: .env
+    volumes:
+      - ./data:/data           # Protokoll/Backup aller Änderungen (audit.jsonl)
